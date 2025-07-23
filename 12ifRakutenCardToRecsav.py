@@ -66,7 +66,7 @@ try:
             if row[0] > 0:
                 start_date = row[1]
                 end_date = row[2]
-                logger.info('iif_rakuten_card 対象日：' + datetime.strftime(start_date,"%Y%m%d") + '～' + datetime.strftime(end_date, "%Y%m%d"))
+                logger.info('if_rakuten_card target day:' + datetime.strftime(start_date,"%Y%m%d") + '-' + datetime.strftime(end_date, "%Y%m%d"))
                 # household_account_bookテーブルのデータを削除する
                 sql = "DELETE FROM household_account_book WHERE linking_data_type = 1 AND actual_date >= %s AND actual_date <= %s "
                 cur.execute(sql, (datetime.strftime(
