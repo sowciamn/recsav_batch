@@ -13,6 +13,11 @@ from dateutil.relativedelta import relativedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import traceback
+from selenium.webdriver.common.keys import Keys
 
 ### 引数取得 ###
 args = sys.argv
@@ -29,8 +34,6 @@ password = config["RAKUTEN"]["password"]
 history_csv = config["RAKUTEN"]["history_csv"]
 output_dir = config["OUTPUT"]["dir"]
 log_file = config["LOG"]["path"]
-chrome_bin = config["BINARY"]["chrome_bin"]
-chrome_driver = config["BINARY"]["chrome_driver"]
 
 ### ログ設定 ###
 logger = logzero.setup_logger(
@@ -48,6 +51,9 @@ logger = logzero.setup_logger(
 ### CSV設定 ###
 output_file = os.path.join(output_dir, history_csv)
 
+### Chromeドライバのパス設定 ###
+chromedriver_path = config["WEBDRIVER"]["chrome_driver"]
+
 ### 履歴の検索対象日 ###
 today = datetime.today()
 if arg_today is not None:
@@ -55,14 +61,15 @@ if arg_today is not None:
 target_month = today - relativedelta(months=1)
 
 try:
-    logger.info('*** 05 createRakutenCardCsv START ***')
-    logger.info('対象月：' + datetime.strftime(target_month, "%Y%m"))
+    logger.info('*** 01 createRakutenCardCsv START ***')
 
     ### Chromeドライバを生成 ###
+    services = Service(executable_path=chromedriver_path)
+
     options = webdriver.ChromeOptions()
     options.add_argument("start-maximized")
     options.add_argument("enable-automation")
-    options.add_argument("--headless")
+    # options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-infobars")
     options.add_argument('--disable-extensions')
@@ -78,7 +85,7 @@ try:
         "profile.default_content_setting_values.notifications" : 2,
         "safebrowsing.enabled": True
     })
-    driver = webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(service=services, options=options)
 
     os.makedirs(output_dir, exist_ok=True)
     if os.path.exists(output_file):
@@ -86,27 +93,44 @@ try:
 
     ### 楽天e-NAVIへログイン ###
     driver.get(url)
-    time.sleep(5)
-    elem = driver.find_element(By.ID, "u")
+    wait = WebDriverWait(driver, 20)
+
+    # ユーザーID入力フィールド
+    elem = wait.until(EC.element_to_be_clickable((By.ID, "user_id")))
     elem.clear()
     elem.send_keys(user)
-    elem = driver.find_element(By.ID, "p")
+
+    # 最初の「次へ」ボタン
+    wait.until(EC.element_to_be_clickable((By.ID, "cta001"))).click()
+
+    # パスワード入力フィールド
+    elem = wait.until(EC.element_to_be_clickable((By.ID, "password_current")))
     elem.clear()
+    elem.click()
     elem.send_keys(password)
-    driver.find_element(By.NAME, "login").click()
+    elem.send_keys(Keys.TAB)
+    elem.send_keys(Keys.TAB)
+    elem.send_keys(Keys.ENTER)
+
+    # ログイン処理の完了を待つ
     time.sleep(5)
 
     ### CSVをダウンロード ###
     driver.get("https://www.rakuten-card.co.jp/e-navi/members/statement/index.xhtml")
-    time.sleep(5)
-    
-    # CSVダウンロードボタンをクリック
-    driver.find_element(By.ID, "csv-output").click()
-    time.sleep(5)
+    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".stmt-c-btn-dl.stmt-csv-btn"))).click()
 
     ### ダウンロードしたCSVをリネーム ###
-    # ファイル名が 'card_meisai_YYYYMMDDHHMMSS.csv' のような形式を想定
-    download_files = glob.glob(os.path.join(output_dir, 'card_meisai_*.csv'))
+    # ファイル名が 'enaviYYYYMM(9814).csv' のような形式を想定
+    download_pattern = os.path.join(output_dir, 'enavi*.csv')
+    download_files = []
+    # ダウンロードが完了するまで最大30秒待機
+    for _ in range(30):
+        download_files = glob.glob(download_pattern)
+        if download_files:
+            time.sleep(5)
+            break
+        time.sleep(1)
+
     if download_files:
         latest_file = max(download_files, key=os.path.getctime)
         os.rename(latest_file, output_file)
@@ -117,8 +141,9 @@ try:
 
 except Exception as e:
     logger.error('Exception Error: %s' % e)
+    logger.error(traceback.format_exc())
     sys.exit(1)
 
 finally:
     driver.quit()
-    logger.info('*** 05 createRakutenCardCsv END ***')
+    logger.info('*** 01 createRakutenCardCsv END ***')
