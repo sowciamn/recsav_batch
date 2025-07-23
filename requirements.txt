@@ -1,0 +1,7 @@
+selenium
+beautifulsoup4
+psycopg2-binary
+psycopg2
+logzero
+python-dateutil
+
