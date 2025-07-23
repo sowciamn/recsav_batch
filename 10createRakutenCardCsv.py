@@ -116,7 +116,7 @@ try:
     time.sleep(5)
 
     # ダウンロードするtabNoのリスト
-    tab_numbers = [0, 1, 3]
+    tab_numbers = [0, 1, 2]
 
     for tab_no in tab_numbers:
         download_url = f"https://www.rakuten-card.co.jp/e-navi/members/statement/index.xhtml?tabNo={tab_no}"
