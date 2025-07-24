@@ -131,6 +131,13 @@ try:
                 sql = sql + "WHERE icmc.linking_excluded_flg IS NULL "
                 cur.execute(sql)
 
+                # linking_dataのlast_linking_dateを更新
+                sql = ""
+                sql = sql + "UPDATE linking_data "
+                sql = sql + "SET last_linking_date = CURRENT_DATE "
+                sql = sql + "WHERE linking_data_type = 1 "
+                cur.execute(sql)
+
 except psycopg2.DatabaseError as e:
     if con:
         con.rollback()
