@@ -5,7 +5,7 @@
 ## 機能
 
 - **楽天カード明細ダウンロード**: 楽天 e-NAVI から CSV 明細をダウンロードします。
-- **CSV を ifZaim へインポート**: ダウンロードした CSV データを`if_zaim`データベースにインポートします。
+- **CSV を ifZaim へインポート**: ダウンロードした CSV データを`if_rakuten_card`データベースにインポートします。
 - **Recsav へのデータ連携**: 処理されたデータを`if_rakuten_card`から Recsav の`household_account_book`テーブルへ連携します。
 
 ## セットアップ
