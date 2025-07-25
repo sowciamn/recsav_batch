@@ -23,4 +23,9 @@ REM 12 if_rakuten_card → household_account_bookへのデータ連携
 REM =============================================================
 python 12ifRakutenCardToRecsav.py
 
+REM =============================================================
+REM 99 毎月1日に繰り返し入力設定の内容をhousehold_account_bookへ反映
+REM =============================================================
+python 90RecsavRecurringInput.py
+
 exit 0

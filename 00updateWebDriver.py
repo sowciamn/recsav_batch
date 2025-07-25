@@ -1,6 +1,7 @@
 import os
 import re
 import zipfile
+import sys
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import SessionNotCreatedException, WebDriverException

@@ -19,12 +19,6 @@ from selenium.webdriver.support import expected_conditions as EC
 import traceback
 from selenium.webdriver.common.keys import Keys
 
-### 引数取得 ###
-args = sys.argv
-arg_today = None
-if len(args) > 1:
-    arg_today = datetime.strptime(args[1] + ' 00:00:00', '%Y-%m-%d %H:%M:%S')
-
 ### 設定値取得 ###
 config = configparser.ConfigParser()
 config.read("settings.ini", "utf-8")
@@ -50,12 +44,6 @@ logger = logzero.setup_logger(
 
 ### Chromeドライバのパス設定 ###
 chromedriver_path = config["WEBDRIVER"]["chrome_driver"]
-
-### 履歴の検索対象日 ###
-today = datetime.today()
-if arg_today is not None:
-    today = arg_today
-target_month = today - relativedelta(months=1)
 
 try:
     logger.info('*** 10 createRakutenCardCsv START ***')
