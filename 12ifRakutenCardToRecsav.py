@@ -27,26 +27,6 @@ def get_target_period(cursor):
     result = cursor.fetchone()
     return result if result else (0, None, None)
 
-
-def delete_existing_data(cursor, start_date, end_date):
-    """
-    指定期間の既存データをhousehold_account_bookテーブルから削除します。
-
-    Args:
-        cursor: データベースカーソル
-        start_date (datetime.date): 削除対象期間の開始日
-        end_date (datetime.date): 削除対象期間の終了日
-    """
-    logger.info(f"Deleting existing data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}.")
-    sql = """
-        DELETE FROM household_account_book
-        WHERE linking_data_type = 1 
-          AND actual_date >= %s 
-          AND actual_date <= %s
-    """
-    cursor.execute(sql, (start_date, end_date))
-
-
 def insert_new_stores(cursor):
     """
     if_rakuten_cardに存在する新しい店舗名をstoreテーブルに登録します。
@@ -73,7 +53,7 @@ def insert_new_stores(cursor):
 
 def insert_account_book_data(cursor):
     """
-    if_rakuten_cardのデータをhousehold_account_bookテーブルに登録します。
+    if_rakuten_cardのデータから、household_account_bookテーブルに未登録のデータを登録します。
 
     Args:
         cursor: データベースカーソル
@@ -83,29 +63,44 @@ def insert_account_book_data(cursor):
         INSERT INTO household_account_book (
             actual_date, category_cd, store_cd, amount, remarks, linking_data_type
         )
-        WITH iv_category_mapping_config AS (
-            SELECT
-                irc.if_rakuten_card_seq,
-                irc.merchant_product_name,
-                cmc.category_cd,
-                cmc.linking_excluded_flg
-            FROM category_mapping_config cmc
-            INNER JOIN if_rakuten_card irc
-                ON irc.merchant_product_name LIKE '%' || cmc.mapping_key_nm || '%'
-        )
+        WITH iv_category_mapping_config AS ( 
+          SELECT
+              irc.if_rakuten_card_seq
+            , irc.merchant_product_name
+            , cmc.category_cd
+            , cmc.linking_excluded_flg 
+          FROM
+            category_mapping_config cmc 
+            INNER JOIN if_rakuten_card irc 
+              ON irc.merchant_product_name LIKE '%' || cmc.mapping_key_nm || '%'
+        ) 
         SELECT
-            irc.usage_date AS actual_date,
-            COALESCE(icmc.category_cd, 1000) AS category_cd,
-            s.store_cd,
-            irc.total_payment_amount AS amount,
-            NULL AS remarks,
-            1 AS linking_data_type
-        FROM if_rakuten_card irc
-        LEFT OUTER JOIN iv_category_mapping_config icmc
-            ON icmc.if_rakuten_card_seq = irc.if_rakuten_card_seq
-        LEFT OUTER JOIN store s
-            ON s.store_nm = irc.merchant_product_name
-        WHERE icmc.linking_excluded_flg IS NULL
+            irc.usage_date                   AS actual_date
+          , coalesce(icmc.category_cd, 1000) AS category_cd
+          , s.store_cd
+          , irc.total_payment_amount         AS amount
+          , NULL                             AS remarks
+          , 1                                AS linking_data_type 
+        FROM
+          if_rakuten_card irc 
+          LEFT OUTER JOIN iv_category_mapping_config icmc 
+            ON icmc.if_rakuten_card_seq = irc.if_rakuten_card_seq 
+          LEFT OUTER JOIN store s 
+            ON s.store_nm = irc.merchant_product_name 
+        WHERE
+          icmc.linking_excluded_flg IS NULL 
+          AND NOT EXISTS ( 
+            SELECT
+                * 
+            FROM
+              household_account_book hab 
+            WHERE
+              hab.actual_date = irc.usage_date 
+              AND hab.category_cd = coalesce(icmc.category_cd, 1000) 
+              AND hab.store_cd = s.store_cd 
+              AND hab.amount = irc.total_payment_amount 
+              AND hab.linking_data_type = 1
+          )
     """
     cursor.execute(sql)
     logger.info(f"{cursor.rowcount} records inserted into household_account_book.")
@@ -149,11 +144,10 @@ def main():
         if count == 0:
             logger.info("No data to process in if_rakuten_card. Exiting.")
             return
-        
+
         logger.info(f"Processing data for period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
         # --- データ連携処理 ---
-        delete_existing_data(cursor, start_date, end_date)
         insert_new_stores(cursor)
         insert_account_book_data(cursor)
         update_linking_date(cursor)
