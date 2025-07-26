@@ -81,3 +81,6 @@ settings.ini
 
 #driver
 chromedriver.exe
+
+# Python cache
+__pycache__

@@ -2,39 +2,31 @@ import os
 import re
 import zipfile
 import sys
+import requests
+import urllib.request
+from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
-import urllib.request
-import requests
-from bs4 import BeautifulSoup
-import configparser
-import logging
-import logzero
 from logzero import logger
+import common
 
-### 設定値取得 ###
-config = configparser.ConfigParser()
-config.read("settings.ini", "utf-8")
-log_file = config["LOG"]["path"]
-WEBDRIVER_BASE_URL = config["WEBDRIVER"]["webdriver_base_url"]
-LATEST_VERSION_URL = config["WEBDRIVER"]["latest_version_url"]
+# --- 定数 ---
+CHROMEDRIVER_PATH = 'chromedriver.exe'
+DOWNLOAD_ZIP_PATH = 'download_webdriver.zip'
+EXTRACT_DRIVER_PATH = 'chromedriver-win32/chromedriver.exe'
 
-### ログ設定 ###
-logger = logzero.setup_logger(
-    name='logzero',
-    logfile=log_file,
-    level=20,
-    formatter=logging.Formatter(
-        '[%(levelname)s %(asctime)s] %(message)s'),
-    maxBytes=10240,
-    backupCount=3,
-    fileLoglevel=20,
-    disableStderrLogger=False,
-)
 
-# WebDriverを起動する
-def isLaunch(chromedriver_path='chromedriver.exe'):
+def check_webdriver_launch(chromedriver_path=CHROMEDRIVER_PATH):
+    """
+    指定されたパスのWebDriverが正常に起動できるか確認します。
+
+    Args:
+        chromedriver_path (str, optional): 確認するWebDriverのパス。
+
+    Returns:
+        bool or Exception: 起動成功時はTrue、失敗時は発生した例外オブジェクト。
+    """
     service = Service(executable_path=chromedriver_path)
     try:
         driver = webdriver.Chrome(service=service)
@@ -42,16 +34,26 @@ def isLaunch(chromedriver_path='chromedriver.exe'):
         driver.quit()
         return True
     except (FileNotFoundError, WebDriverException, SessionNotCreatedException) as e:
-        logger.error(f"Failed to launch WebDriver. Error details: {str(e)}")
+        logger.error(f"Failed to launch WebDriver. Error details: {e}")
         return e
 
-# 最新のWebDriverのバージョンを取得する関数
-def get_latest_webdriver_version():
+
+def get_latest_webdriver_version(latest_version_url):
+    """
+    最新の安定版WebDriverのバージョン番号を取得します。
+
+    Args:
+        latest_version_url (str): 最新バージョン情報が記載されたURL。
+
+    Returns:
+        str or None: バージョン番号。取得失敗時はNone。
+    """
     try:
-        response = requests.get(LATEST_VERSION_URL)
-        response.raise_for_status() # Raise an exception for HTTP errors
+        response = requests.get(latest_version_url)
+        response.raise_for_status()  # HTTPエラーの場合は例外を発生
         soup = BeautifulSoup(response.content, 'html.parser')
 
+        # "Stable" の文字列が含まれるtd要素からバージョン番号を取得
         td_element = soup.find(string="Stable").find_next('td')
         stable_version = td_element.find("code").text
         logger.info(f"Latest stable WebDriver version: {stable_version}")
@@ -60,67 +62,104 @@ def get_latest_webdriver_version():
         logger.error(f"Error while fetching latest WebDriver version: {e}")
         return None
     except AttributeError:
-        logger.error("HTML structure changed or stable version not found.")
+        logger.error("Could not find the version number. The HTML structure of the page may have changed.")
         return None
 
-# 指定されたバージョンのWebDriverをダウンロードする関数
-def download_webdriver_version(version):
+
+def download_webdriver(version, webdriver_base_url):
+    """
+    指定されたバージョンのWebDriverをダウンロードし、展開します。
+
+    Args:
+        version (str): ダウンロードするWebDriverのバージョン。
+        webdriver_base_url (str): WebDriverのダウンロード元ベースURL。
+
+    Returns:
+        bool: 成功した場合はTrue、失敗した場合はFalse。
+    """
+    # file_url = f"{webdriver_base_url}/{version}/win32/chromedriver-win32.zip"
     file_url = f"https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/{version}/win32/chromedriver-win32.zip"
-    save_path = "./download_webdriver.zip"
     logger.info(f'Downloading WebDriver version {version}.')
     try:
-        # Download zip file
+        # zipファイルをダウンロード
         with urllib.request.urlopen(file_url) as download_file:
-            data = download_file.read()
-            with open(save_path, mode='wb') as save_file:
-                save_file.write(data)
-        # Extract downloaded zip file
-        with zipfile.ZipFile("./download_webdriver.zip") as obj_zip:
-            with obj_zip.open('chromedriver-win32/chromedriver.exe') as src, open('./chromedriver.exe', 'wb') as dst:
+            with open(DOWNLOAD_ZIP_PATH, mode='wb') as save_file:
+                save_file.write(download_file.read())
+        
+        # zipファイルを展開してchromedriver.exeを取得
+        with zipfile.ZipFile(DOWNLOAD_ZIP_PATH) as obj_zip:
+            with obj_zip.open(EXTRACT_DRIVER_PATH) as src, open(CHROMEDRIVER_PATH, 'wb') as dst:
                 dst.write(src.read())
-        # Remove zip file
-        os.remove('./download_webdriver.zip')
+        
         logger.info("WebDriver download and extraction completed.")
         return True
     except Exception as e:
         logger.error(f"Error during WebDriver download or extraction: {e}")
         return False
+    finally:
+        # zipファイルを削除
+        if os.path.exists(DOWNLOAD_ZIP_PATH):
+            os.remove(DOWNLOAD_ZIP_PATH)
 
-# WebDriverのダウンロードと起動を試みる関数
-def download_and_launch_webdriver(error_obj):
-    # Get current version from error message
+
+def update_and_relaunch_webdriver(error_obj, latest_version_url, webdriver_base_url):
+    """
+    エラー情報から適切なWebDriverをダウンロードし、再起動を試みます。
+
+    Args:
+        error_obj (Exception): WebDriver起動時に発生した例外。
+        latest_version_url (str): 最新バージョン情報が記載されたURL。
+        webdriver_base_url (str): WebDriverのダウンロード元ベースURL。
+    """
+    # エラーメッセージから現在のChromeバージョンを正規表現で抽出
     match = re.search(r'(?<=\bchrome=)\d+', str(error_obj))
     if match:
         current_version = match.group()
         logger.info(f"Detected Chrome version from error message: {current_version}")
     else:
         logger.warning("Could not get Chrome version from error message. Fetching latest version.")
-        current_version = get_latest_webdriver_version()
+        current_version = get_latest_webdriver_version(latest_version_url)
         if not current_version:
             logger.error("Could not get the latest WebDriver version. Exiting process.")
             return
 
-    # Get version information and download
-    if download_webdriver_version(current_version):
-        if isLaunch() is True:
+    # 新しいWebDriverをダウンロードして起動確認
+    if download_webdriver(current_version, webdriver_base_url):
+        if check_webdriver_launch():
             logger.info("WebDriver updated and launched successfully.")
         else:
             logger.error("Failed to launch WebDriver after update.")
     else:
         logger.error("WebDriver download failed, not attempting to launch.")
 
-# Main execution part
-try:
-    logger.info('*** 00 updateWebDriver START ***')
-    error = isLaunch()
-    if isinstance(error, (SessionNotCreatedException, FileNotFoundError, WebDriverException)):
-        download_and_launch_webdriver(error)
-    elif error is not True:
-        logger.error(f"An unexpected error occurred: {str(error)}")
 
-except Exception as e:
-    logger.error(f'An unexpected error occurred: {e}')
-    sys.exit(1)
+def main():
+    """
+    メイン処理
+    """
+    try:
+        # --- 初期設定 ---
+        config = common.load_config()
+        common.setup_logger(config["LOG"]["path"])
+        webdriver_base_url = config["WEBDRIVER"]["webdriver_base_url"]
+        latest_version_url = config["WEBDRIVER"]["latest_version_url"]
 
-finally:
-    logger.info('*** 00 updateWebDriver END ***')
+        logger.info('*** 00 updateWebDriver START ***')
+
+        # --- WebDriver起動確認 ---
+        error = check_webdriver_launch()
+
+        # --- エラー内容に応じて更新処理を実行 ---
+        if isinstance(error, (SessionNotCreatedException, FileNotFoundError, WebDriverException)):
+            update_and_relaunch_webdriver(error, latest_version_url, webdriver_base_url)
+        elif error is not True:
+            logger.error(f"An unexpected error occurred: {error}")
+
+    except Exception as e:
+        logger.error(f'An unexpected error occurred in main process: {e}')
+        sys.exit(1)
+    finally:
+        logger.info('*** 00 updateWebDriver END ***')
+
+if __name__ == "__main__":
+    main()

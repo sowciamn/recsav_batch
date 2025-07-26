@@ -1,162 +1,187 @@
 import sys
-import configparser
 import psycopg2
 import traceback
-import logging
-import logzero
 from logzero import logger
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
+from datetime import datetime
+import common
 
-### 設定値取得 ###
-config = configparser.ConfigParser()
-config.read("settings.ini")
-host = config["DB"]["host"]
-port = config["DB"]["port"]
-dbname = config["DB"]["dbname"]
-dbuser = config["DB"]["dbuser"]
-dbpassword = config["DB"]["dbpassword"]
-log_file = config["LOG"]["path"]
 
-### ログ設定 ###
-logger = logzero.setup_logger(
-    # loggerの名前、複数loggerを用意するときに区別できる
-    name='logzero',
-    # ログファイルの格納先
-    logfile=log_file,
-    # 標準出力のログレベル
-    level=20,
-    formatter=logging.Formatter(
-        '[%(levelname)s %(asctime)s] %(message)s'),    # ログのフォーマット
-    # ログローテーションする際のファイルの最大バイト数
-    maxBytes=10240,
-    # ログローテーションする際のバックアップ数
-    backupCount=3,
-    # ログファイルのログレベル
-    fileLoglevel=20,
-    # 標準出力するかどうか
-    disableStderrLogger=False
-)
+def get_target_period(cursor):
+    """
+    処理対象となる期間を取得します。
 
-### DB接続設定 ###
-context = "host={} port={} dbname={} user={} password={}"
-context = context.format(host, port, dbname, dbuser, dbpassword)
+    Args:
+        cursor: データベースカーソル
 
-### if_rakuten → recsavテーブル連携 ###
-try:
-    logger.info('*** 12 ifRakutenCardToRecsav START ***')
+    Returns:
+        tuple: (データ件数, 開始日, 終了日) or (0, None, None)
+    """
+    sql = """
+        SELECT
+            COUNT(*) AS CNT,
+            MIN(usage_date) AS START_DATE,
+            MAX(usage_date) AS END_DATE
+        FROM if_rakuten_card
+    """
+    cursor.execute(sql)
+    result = cursor.fetchone()
+    return result if result else (0, None, None)
 
-    with psycopg2.connect(context) as con:
-        con.autocommit = False
 
-        with con.cursor() as cur:
+def delete_existing_data(cursor, start_date, end_date):
+    """
+    指定期間の既存データをhousehold_account_bookテーブルから削除します。
 
-            # iif_rakuten_cardのデータ件数を取得
-            sql = ""
-            sql = sql + "SELECT "
-            sql = sql + "    COUNT(irc.*) AS CNT "
-            sql = sql + "  , MIN(irc.usage_date) AS START_DATE "
-            sql = sql + "  , MAX(irc.usage_date) AS END_DATE "
-            sql = sql + "FROM if_rakuten_card irc "
+    Args:
+        cursor: データベースカーソル
+        start_date (datetime.date): 削除対象期間の開始日
+        end_date (datetime.date): 削除対象期間の終了日
+    """
+    logger.info(f"Deleting existing data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}.")
+    sql = """
+        DELETE FROM household_account_book
+        WHERE linking_data_type = 1 
+          AND actual_date >= %s 
+          AND actual_date <= %s
+    """
+    cursor.execute(sql, (start_date, end_date))
 
-            cur.execute(sql)
-            row = cur.fetchone()
 
-            # if_rakuten_cardにデータがある場合は後続処理を実行
-            if row[0] > 0:
-                start_date = row[1]
-                end_date = row[2]
-                logger.info('if_rakuten_card target day:' + datetime.strftime(start_date,"%Y%m%d") + '-' + datetime.strftime(end_date, "%Y%m%d"))
-                # household_account_bookテーブルのデータを削除する
-                sql = "DELETE FROM household_account_book WHERE linking_data_type = 1 AND actual_date >= %s AND actual_date <= %s "
-                cur.execute(sql, (datetime.strftime(
-                    start_date, "%Y/%m/%d"), datetime.strftime(end_date, "%Y/%m/%d")))
+def insert_new_stores(cursor):
+    """
+    if_rakuten_cardに存在する新しい店舗名をstoreテーブルに登録します。
 
-                # if_rakuten_card → storeへデータ連携
-                # 店登録されていないデータを登録
-                sql = ""
-                sql = sql + "INSERT INTO store( "
-                sql = sql + "    store_nm "
-                sql = sql + ") "
-                sql = sql + "SELECT DISTINCT "
-                sql = sql + "    irc.merchant_product_name "
-                sql = sql + "FROM "
-                sql = sql + "  if_rakuten_card irc "
-                sql = sql + "WHERE 0=0 "
-                sql = sql + "AND NOT EXISTS ( "
-                sql = sql + "    SELECT "
-                sql = sql + "        * "
-                sql = sql + "    FROM "
-                sql = sql + "      store s "
-                sql = sql + "    WHERE "
-                sql = sql + "      s.store_nm = irc.merchant_product_name "
-                sql = sql + "  ) "
-                cur.execute(sql)
+    Args:
+        cursor: データベースカーソル
+    """
+    logger.info("Inserting new stores into the store table.")
+    sql = """
+        INSERT INTO store (store_nm)
+        SELECT DISTINCT
+            irc.merchant_product_name
+        FROM
+            if_rakuten_card irc
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM store s
+            WHERE s.store_nm = irc.merchant_product_name
+        )
+    """
+    cursor.execute(sql)
+    logger.info(f"{cursor.rowcount} new stores inserted.")
 
-                # if_rakuten_card → household_account_bookへデータ連携
-                sql = ""
-                sql = sql + "INSERT INTO household_account_book ( "
-                sql = sql + "    actual_date "
-                sql = sql + "  , category_cd "
-                sql = sql + "  , store_cd "
-                sql = sql + "  , amount "
-                sql = sql + "  , remarks "
-                sql = sql + "  , linking_data_type "
-                sql = sql + ") "
-                sql = sql + "WITH iv_category_mapping_config AS ( "
-                sql = sql + " SELECT "
-                sql = sql + "     irc.if_rakuten_card_seq "
-                sql = sql + "   , irc.merchant_product_name "
-                sql = sql + "   , cmc.category_cd "
-                sql = sql + "   , cmc.linking_excluded_flg "
-                sql = sql + " FROM category_mapping_config cmc "
-                sql = sql + "  INNER JOIN if_rakuten_card irc "
-                sql = sql + "     ON irc.merchant_product_name LIKE '%' || cmc.mapping_key_nm || '%' "
-                sql = sql + ") "
-                sql = sql + "SELECT "
-                sql = sql + "    irc.usage_date AS actual_date "
-                sql = sql + "  , CASE "
-                sql = sql + "     WHEN icmc.category_cd IS NULL THEN 1000 "
-                sql = sql + "	 ELSE icmc.category_cd "
-                sql = sql + "    END AS category_cd "
-                sql = sql + "  , s.store_cd "
-                sql = sql + "  , irc.total_payment_amount AS amount "
-                sql = sql + "  , NULL AS remarks "
-                sql = sql + "  , 1 AS linking_data_type "
-                sql = sql + "FROM if_rakuten_card irc "
-                sql = sql + " LEFT OUTER JOIN iv_category_mapping_config icmc "
-                sql = sql + "   ON icmc.if_rakuten_card_seq = irc.if_rakuten_card_seq "
-                sql = sql + " LEFT OUTER JOIN store s "
-                sql = sql + "   ON s.store_nm = irc.merchant_product_name "
-                sql = sql + "WHERE icmc.linking_excluded_flg IS NULL "
-                cur.execute(sql)
 
-                # linking_dataのlast_linking_dateを更新
-                sql = ""
-                sql = sql + "UPDATE linking_data "
-                sql = sql + "SET last_linking_date = CURRENT_DATE "
-                sql = sql + "WHERE linking_data_type = 1 "
-                cur.execute(sql)
+def insert_account_book_data(cursor):
+    """
+    if_rakuten_cardのデータをhousehold_account_bookテーブルに登録します。
 
-except psycopg2.DatabaseError as e:
-    if con:
-        con.rollback()
+    Args:
+        cursor: データベースカーソル
+    """
+    logger.info("Inserting data into household_account_book table.")
+    sql = """
+        INSERT INTO household_account_book (
+            actual_date, category_cd, store_cd, amount, remarks, linking_data_type
+        )
+        WITH iv_category_mapping_config AS (
+            SELECT
+                irc.if_rakuten_card_seq,
+                irc.merchant_product_name,
+                cmc.category_cd,
+                cmc.linking_excluded_flg
+            FROM category_mapping_config cmc
+            INNER JOIN if_rakuten_card irc
+                ON irc.merchant_product_name LIKE '%' || cmc.mapping_key_nm || '%'
+        )
+        SELECT
+            irc.usage_date AS actual_date,
+            COALESCE(icmc.category_cd, 1000) AS category_cd,
+            s.store_cd,
+            irc.total_payment_amount AS amount,
+            NULL AS remarks,
+            1 AS linking_data_type
+        FROM if_rakuten_card irc
+        LEFT OUTER JOIN iv_category_mapping_config icmc
+            ON icmc.if_rakuten_card_seq = irc.if_rakuten_card_seq
+        LEFT OUTER JOIN store s
+            ON s.store_nm = irc.merchant_product_name
+        WHERE icmc.linking_excluded_flg IS NULL
+    """
+    cursor.execute(sql)
+    logger.info(f"{cursor.rowcount} records inserted into household_account_book.")
 
-    logger.error('Error: %s' % e)
-    traceback.print_exc()
-    sys.exit(1)
 
-except Exception as e:
-    if con:
-        con.rollback()
+def update_linking_date(cursor):
+    """
+    linking_dataテーブルの最終連携日時を更新します。
 
-    logger.error('Exception Error: %s' % e)
-    traceback.print_exc()
-    sys.exit(1)
+    Args:
+        cursor: データベースカーソル
+    """
+    logger.info("Updating last linking date.")
+    sql = """
+        UPDATE linking_data
+        SET last_linking_date = CURRENT_DATE
+        WHERE linking_data_type = 1
+    """
+    cursor.execute(sql)
 
-finally:
-    con.commit()
-    if con:
-        cur.close()
-        con.close()
-    logger.info('*** 12 ifRakutenCardToRecsav END ***')
+
+def main():
+    """
+    メイン処理
+    """
+    connection = None
+    try:
+        # --- 初期設定 ---
+        config = common.load_config()
+        common.setup_logger(config["LOG"]["path"])
+
+        logger.info('*** 12 ifRakutenCardToRecsav START ***')
+
+        # --- DB接続 ---
+        connection = common.get_db_connection(config)
+        connection.autocommit = False
+        cursor = connection.cursor()
+
+        # --- 処理対象期間の取得 ---
+        count, start_date, end_date = get_target_period(cursor)
+        if count == 0:
+            logger.info("No data to process in if_rakuten_card. Exiting.")
+            return
+        
+        logger.info(f"Processing data for period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+
+        # --- データ連携処理 ---
+        delete_existing_data(cursor, start_date, end_date)
+        insert_new_stores(cursor)
+        insert_account_book_data(cursor)
+        update_linking_date(cursor)
+
+        # --- コミット ---
+        connection.commit()
+        logger.info("Data processing committed successfully.")
+
+    except psycopg2.DatabaseError as e:
+        logger.error(f'Database error occurred: {e}')
+        logger.error(traceback.format_exc())
+        if connection:
+            connection.rollback()
+            logger.info("Transaction rolled back.")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f'An unexpected error occurred: {e}')
+        logger.error(traceback.format_exc())
+        if connection:
+            connection.rollback()
+            logger.info("Transaction rolled back.")
+        sys.exit(1)
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+            logger.info("Database connection closed.")
+        logger.info('*** 12 ifRakutenCardToRecsav END ***')
+
+if __name__ == "__main__":
+    main()
