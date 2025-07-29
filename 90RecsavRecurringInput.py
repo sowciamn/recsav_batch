@@ -95,6 +95,21 @@ def insert_recurring_data(cursor, exec_date, recurring_data):
         cursor.execute(insert_sql, (exec_date,) + record)
     logger.info("All recurring data has been registered.")
 
+def update_linking_date(cursor):
+    """
+    linking_dataテーブルの最終連携日時を更新します。
+
+    Args:
+        cursor: データベースカーソル
+    """
+    logger.info("Updating last linking date.")
+    sql = """
+        UPDATE linking_data
+        SET last_linking_date = CURRENT_DATE
+        WHERE linking_data_type = 0
+    """
+    cursor.execute(sql)
+
 
 def main():
     """
@@ -128,6 +143,8 @@ def main():
             return
 
         insert_recurring_data(cursor, execution_date, recurring_configs)
+
+        update_linking_date(cursor)
 
         # --- コミット ---
         connection.commit()
