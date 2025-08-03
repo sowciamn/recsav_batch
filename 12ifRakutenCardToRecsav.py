@@ -96,7 +96,6 @@ def insert_account_book_data(cursor):
               household_account_book hab 
             WHERE
               hab.actual_date = irc.usage_date 
-              AND hab.category_cd = coalesce(icmc.category_cd, 1000) 
               AND hab.store_cd = s.store_cd 
               AND hab.amount = irc.total_payment_amount 
               AND hab.linking_data_type = 1
