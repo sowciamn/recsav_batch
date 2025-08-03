@@ -4,6 +4,7 @@ import traceback
 import argparse
 from logzero import logger
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 import common
 
 
@@ -15,7 +16,7 @@ def get_execution_date():
     Returns:
         datetime.date: 実行日
     """
-    parser = argparse.ArgumentParser(description='定期的な支出を家計簿に登録します。')
+    parser = argparse.ArgumentParser(description='定期的な情報をRECSAVに登録します。')
     parser.add_argument(
         '--date', 
         type=str, 
@@ -50,6 +51,21 @@ def delete_existing_recurring_data(cursor, exec_date):
     cursor.execute(sql, (exec_date,))
     logger.info(f"{cursor.rowcount} records deleted.")
 
+def delete_existing_asset_data(cursor, exec_date):
+    """
+    指定された実行日の資産データを削除します。
+
+    Args:
+        cursor: データベースカーソル
+        exec_date (datetime.date): 実行日
+    """
+    logger.info(f"Deleting existing asset data for date: {exec_date}")
+    sql = """
+        DELETE FROM asset
+        WHERE asset_year_month = %s
+    """
+    cursor.execute(sql, (exec_date,))
+    logger.info(f"{cursor.rowcount} records deleted.")
 
 def fetch_recurring_configs(cursor):
     """
@@ -94,6 +110,35 @@ def insert_recurring_data(cursor, exec_date, recurring_data):
     for record in recurring_data:
         cursor.execute(insert_sql, (exec_date,) + record)
     logger.info("All recurring data has been registered.")
+
+def insert_asset_data(cursor, exec_date):
+    """
+    前月の資産データをコピーし、当月の資産データとしてテーブルに登録します。
+
+    Args:
+        cursor: データベースカーソル
+        exec_date (datetime.date): 実行日
+    """
+    logger.info(f"Copy and register the asset data from last month.")
+    insert_sql = """
+        INSERT INTO asset( 
+            asset_year_month
+          , deposit_account_cd
+          , asset_amount
+        ) 
+        SELECT
+            %s
+          , deposit_account_cd
+          , 0 
+        FROM
+          asset 
+        WHERE
+          asset_year_month = %s;
+
+    """
+    one_month_ago = exec_date - relativedelta(months=1)
+
+    cursor.execute(insert_sql, (exec_date, datetime.strftime(one_month_ago, "%Y-%m-%d")))
 
 def update_linking_date(cursor):
     """
@@ -143,6 +188,9 @@ def main():
             return
 
         insert_recurring_data(cursor, execution_date, recurring_configs)
+
+        delete_existing_asset_data(cursor, execution_date)
+        insert_asset_data(cursor, execution_date)
 
         update_linking_date(cursor)
 
