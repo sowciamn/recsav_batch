@@ -35,7 +35,7 @@ def insert_csv_data(cursor, csv_file_path, tab_no):
             usage_amount, payment_fee, total_payment_amount, payment_month, 
             monthly_payment_amount, monthly_carryover_balance, new_signup_flag
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NULLIF(%s,''), %s, %s, NULLIF(%s, ''))
     """
 
     with open(csv_file_path, mode="r", encoding="utf-8") as f:
@@ -49,7 +49,7 @@ def insert_csv_data(cursor, csv_file_path, tab_no):
             
             # tab_noに応じて挿入するデータを調整
             if tab_no == 0:
-                params = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10])
+                params = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], None, None, None)
             else:
                 params = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], None, row[7], row[8], row[9])
             
